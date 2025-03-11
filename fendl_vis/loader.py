@@ -2,7 +2,6 @@
 ENDF file loader module.
 """
 
-import os
 from pathlib import Path
 import endf
 

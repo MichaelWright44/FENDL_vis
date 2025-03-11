@@ -2,7 +2,6 @@
 Simple GUI for browsing and plotting ENDF data.
 """
 
-import os
 import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog, messagebox, scrolledtext

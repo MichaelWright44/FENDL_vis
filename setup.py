@@ -15,9 +15,9 @@ setup(
         ],
     },
     description="Library for loading and visualizing ENDF data from FENDL",
-    author="FENDL Developer",
-    author_email="example@example.com",
-    url="https://github.com/yourusername/fendl_vis",
+    author="Michael Wright",
+    author_email="michaelwright4231@gmail.com",
+    url="https://github.com/MichaelWright44/FENDL_vis",
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
