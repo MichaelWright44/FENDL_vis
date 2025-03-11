@@ -5,7 +5,7 @@ Simple GUI for browsing and plotting ENDF data.
 import os
 import tkinter as tk
 from tkinter import ttk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, scrolledtext
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
@@ -29,6 +29,7 @@ class EndfGui:
         self.loader = EndfLoader(self.data_dir)
         self.material = None
         self.current_plot = None
+        self.text_widget = None
         
         self._create_widgets()
         self._load_file_list()
@@ -43,7 +44,7 @@ class EndfGui:
         self.left_panel = ttk.Frame(self.main_frame, padding="5", width=300)
         self.left_panel.pack(side=tk.LEFT, fill=tk.Y, expand=False)
         
-        # Create right panel (plot area)
+        # Create right panel (plot/text display area)
         self.right_panel = ttk.Frame(self.main_frame, padding="5")
         self.right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
         
@@ -116,11 +117,16 @@ class EndfGui:
         )
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
         
-        # Plot area
-        self.plot_frame = ttk.Frame(self.right_panel)
-        self.plot_frame.pack(fill=tk.BOTH, expand=True)
+        # Initialize display area with a welcome message
+        self._init_display_area()
+    
+    def _init_display_area(self):
+        """Initialize the display area with a welcome message."""
+        # Create a container frame for the display area (this stays for the entire session)
+        self.display_container = ttk.Frame(self.right_panel)
+        self.display_container.pack(fill=tk.BOTH, expand=True)
         
-        # Initial figure
+        # Initial empty figure
         self.fig, self.ax = plt.subplots(figsize=(6, 4))
         self.ax.set_xlabel('Energy (eV)')
         self.ax.set_ylabel('Cross Section (barns)')
@@ -129,13 +135,16 @@ class EndfGui:
         self.ax.grid(True)
         
         # Canvas for the plot
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_frame)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.display_container)
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         
         # Navigation toolbar
-        self.toolbar = NavigationToolbar2Tk(self.canvas, self.plot_frame)
+        self.toolbar = NavigationToolbar2Tk(self.canvas, self.display_container)
         self.toolbar.update()
+        
+        # Flag for display type
+        self.current_display_type = 'plot'  # can be 'plot' or 'text'
     
     def _load_file_list(self):
         """Load the list of ENDF files from the data directory."""
@@ -250,53 +259,121 @@ class EndfGui:
             
             section_data = self.material.section_data[selected_mf, selected_mt]
             
-            # Clear previous plot
-            if hasattr(self, 'canvas'):
-                self.canvas.get_tk_widget().destroy()
-            if hasattr(self, 'toolbar'):
-                self.toolbar.destroy()
-            
-            # Close previous plot
-            plt.close(self.fig)
+            # Clear previous plot or text
+            self._clear_display_area()
             
             # Create title
             title = f"MF={selected_mf} ({self._get_mf_description(selected_mf)}), " \
                     f"MT={selected_mt} ({self._get_mt_description(selected_mt)})"
             
-            # Create a new plot
+            # Try different visualization approaches based on section type
             if selected_mf == 3 and 'sigma' in section_data:
                 try:
                     # Try to plot cross section data
-                    self.fig, self.ax = EndfPlotter.plot_cross_section(
-                        section_data,
-                        title=title,
-                        log_scale=self.log_scale_var.get(),
-                        show=False
-                    )
+                    self._display_plot(section_data, title)
                     self.status_var.set(f"Plotted cross section (MF={selected_mf}, MT={selected_mt})")
                 except Exception as e:
-                    # If that fails, fall back to generic plot
-                    self._plot_generic_data(section_data, title)
+                    # If that fails, try displaying as text
+                    self._display_text_data(section_data, title)
+            elif selected_mf == 1:
+                # For general info sections, display as text
+                self._display_text_data(section_data, title)
             else:
-                # For non-cross-section data, try to find plottable data
-                self._plot_generic_data(section_data, title)
-            
-            # Add the plot to the GUI
-            self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_frame)
-            self.canvas.draw()
-            self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-            
-            # Add toolbar
-            self.toolbar = NavigationToolbar2Tk(self.canvas, self.plot_frame)
-            self.toolbar.update()
+                # For other sections, try to find plottable data first
+                try:
+                    self._display_plot(section_data, title)
+                except ValueError:
+                    # If no plottable data, display as text
+                    self._display_text_data(section_data, title)
             
         except Exception as e:
-            messagebox.showerror("Error", f"Error plotting section: {e}")
-            self.status_var.set("Error plotting section")
+            messagebox.showerror("Error", f"Error displaying section: {e}")
+            self.status_var.set("Error displaying section")
     
-    def _plot_generic_data(self, section_data, title):
-        """Try to plot generic data from a section."""
-        # Try to find plottable data
+    def _clear_display_area(self):
+        """Clear the display area completely."""
+        # Destroy the entire container frame and all its children
+        if hasattr(self, 'display_container') and self.display_container.winfo_exists():
+            for widget in self.display_container.winfo_children():
+                widget.destroy()
+        
+        # Close any matplotlib figures
+        if hasattr(self, 'fig'):
+            plt.close(self.fig)
+        
+        # Reset references
+        self.canvas = None
+        self.toolbar = None
+        self.text_widget = None
+        
+        # Force an update to ensure Tkinter cleans up everything
+        self.root.update()
+    
+    def _reset_display_area(self):
+        """Completely reset the display area by recreating the container."""
+        # First destroy the old container
+        if hasattr(self, 'display_container') and self.display_container.winfo_exists():
+            self.display_container.destroy()
+        
+        # Close any matplotlib figures
+        if hasattr(self, 'fig'):
+            plt.close(self.fig)
+        
+        # Reset references
+        self.canvas = None
+        self.toolbar = None
+        self.text_widget = None
+        
+        # Create a new container
+        self.display_container = ttk.Frame(self.right_panel)
+        self.display_container.pack(fill=tk.BOTH, expand=True)
+        
+        # Force an update to ensure Tkinter cleans up everything
+        self.root.update()
+    
+    def _display_plot(self, section_data, title):
+        """Display plot for the section data."""
+        # Reset the display area completely
+        self._reset_display_area()
+        
+        # Check if the data can be plotted as a cross section
+        if 'sigma' in section_data:
+            self.fig, self.ax = EndfPlotter.plot_cross_section(
+                section_data,
+                title=title,
+                log_scale=self.log_scale_var.get(),
+                show=False
+            )
+        else:
+            # Otherwise look for general plottable data
+            x_data, y_data, xlabel, ylabel = self._find_plottable_data(section_data)
+            
+            if x_data is not None and y_data is not None:
+                self.fig, self.ax = EndfPlotter.plot_general_data(
+                    x_data, y_data,
+                    title=title,
+                    xlabel=xlabel,
+                    ylabel=ylabel,
+                    log_scale=self.log_scale_var.get(),
+                    show=False
+                )
+            else:
+                raise ValueError("No plottable data found")
+        
+        # Add the plot to the GUI
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.display_container)
+        self.canvas.draw()
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        # Add toolbar
+        self.toolbar = NavigationToolbar2Tk(self.canvas, self.display_container)
+        self.toolbar.update()
+        
+        # Update display type flag
+        self.current_display_type = 'plot'
+    
+    def _find_plottable_data(self, section_data):
+        """Find plottable data in the section."""
         x_data = None
         y_data = None
         xlabel = None
@@ -325,24 +402,154 @@ class EndfGui:
                     ylabel = 'Cross Section (barns)' if y_key == 'sigma' else 'Y values'
                     break
         
-        if x_data is not None and y_data is not None and len(x_data) == len(y_data):
-            # Plot the data
-            self.fig, self.ax = EndfPlotter.plot_general_data(
-                x_data, y_data,
-                title=title,
-                xlabel=xlabel,
-                ylabel=ylabel,
-                log_scale=self.log_scale_var.get(),
-                show=False
-            )
+        # Make sure x and y data have the same length
+        if x_data is not None and y_data is not None and len(x_data) != len(y_data):
+            x_data = None
+            y_data = None
+        
+        return x_data, y_data, xlabel, ylabel
+    
+    def _display_text_data(self, section_data, title):
+        """Display section data as text when it cannot be plotted."""
+        # Reset the display area completely
+        self._reset_display_area()
+        
+        # Create a new text widget
+        self.text_widget = scrolledtext.ScrolledText(
+            self.display_container,
+            width=80,
+            height=30,
+            wrap=tk.WORD,
+            font=('Courier', 10)
+        )
+        self.text_widget.pack(fill=tk.BOTH, expand=True)
+        
+        # Insert title
+        self.text_widget.insert(tk.END, f"{title}\n", 'title')
+        self.text_widget.insert(tk.END, f"{'-' * len(title)}\n\n", 'title')
+        
+        # Configure tags
+        self.text_widget.tag_configure('title', font=('Courier', 12, 'bold'))
+        self.text_widget.tag_configure('header', font=('Courier', 10, 'bold'))
+        self.text_widget.tag_configure('value', font=('Courier', 10))
+        
+        # Display all key-value pairs in the section
+        self.text_widget.insert(tk.END, "Section Data:\n", 'header')
+        
+        # Format the data nicely based on type
+        self._format_section_data(section_data)
+        
+        # Make the text widget read-only
+        self.text_widget.config(state=tk.DISABLED)
+        
+        # Update display type flag
+        self.current_display_type = 'text'
+        
+        self.status_var.set(f"Displaying text data for section")
+    
+    def _format_section_data(self, section_data, indent=""):
+        """Format section data for text display with proper indentation and structure."""
+        # Check for empty data
+        if not section_data:
+            self.text_widget.insert(tk.END, f"{indent}No data available\n")
+            return
+        
+        # Separate scalar values and array/complex values for better display
+        scalars = {}
+        arrays = {}
+        objects = {}
+        
+        for key, value in section_data.items():
+            if isinstance(value, (int, float, str, bool)) or value is None:
+                scalars[key] = value
+            elif isinstance(value, (list, np.ndarray)) or hasattr(value, 'shape'):
+                arrays[key] = value
+            else:
+                objects[key] = value
+        
+        # Display scalars first (simple key-value pairs)
+        if scalars:
+            self.text_widget.insert(tk.END, f"{indent}Scalar Values:\n", 'header')
+            for key, value in sorted(scalars.items()):
+                # Format numbers nicely
+                if isinstance(value, float):
+                    if abs(value) < 0.001 or abs(value) > 1000:
+                        formatted_value = f"{value:.6e}"
+                    else:
+                        formatted_value = f"{value:.6f}"
+                else:
+                    formatted_value = str(value)
+                
+                self.text_widget.insert(tk.END, f"{indent}  {key}: ", 'header')
+                self.text_widget.insert(tk.END, f"{formatted_value}\n", 'value')
+        
+        # Display array data with size info
+        if arrays:
+            self.text_widget.insert(tk.END, f"\n{indent}Array Data:\n", 'header')
+            for key, value in sorted(arrays.items()):
+                if hasattr(value, 'shape'):
+                    size_info = f"shape={value.shape}"
+                elif hasattr(value, '__len__'):
+                    size_info = f"length={len(value)}"
+                else:
+                    size_info = "unknown size"
+                
+                self.text_widget.insert(tk.END, f"{indent}  {key}: ", 'header')
+                self.text_widget.insert(tk.END, f"{size_info}\n", 'value')
+                
+                # Show a sample of array values
+                if hasattr(value, '__len__') and len(value) > 0:
+                    sample_size = min(5, len(value))
+                    self.text_widget.insert(tk.END, f"{indent}    Sample: [", 'value')
+                    for i in range(sample_size):
+                        if isinstance(value[i], float):
+                            self.text_widget.insert(tk.END, f"{value[i]:.6e}", 'value')
+                        else:
+                            self.text_widget.insert(tk.END, f"{value[i]}", 'value')
+                        
+                        if i < sample_size - 1:
+                            self.text_widget.insert(tk.END, ", ", 'value')
+                    
+                    if len(value) > sample_size:
+                        self.text_widget.insert(tk.END, f", ... ({len(value) - sample_size} more)", 'value')
+                    
+                    self.text_widget.insert(tk.END, "]\n", 'value')
+        
+        # Display complex objects
+        if objects:
+            self.text_widget.insert(tk.END, f"\n{indent}Complex Objects:\n", 'header')
+            for key, value in sorted(objects.items()):
+                self.text_widget.insert(tk.END, f"{indent}  {key}: ", 'header')
+                
+                # For Tabulated1D objects or similar
+                if hasattr(value, 'x') and hasattr(value, 'y'):
+                    x_len = len(value.x) if hasattr(value.x, '__len__') else 'unknown'
+                    self.text_widget.insert(tk.END, f"Tabulated data with {x_len} points\n", 'value')
+                else:
+                    # Generic object info
+                    obj_type = type(value).__name__
+                    self.text_widget.insert(tk.END, f"{obj_type}\n", 'value')
+                    
+                    # Try to get attributes if available
+                    if hasattr(value, '__dict__'):
+                        attrs = {k: v for k, v in vars(value).items() if not k.startswith('_')}
+                        if attrs:
+                            self.text_widget.insert(tk.END, f"{indent}    Attributes:\n", 'header')
+                            for attr_name, attr_value in attrs.items():
+                                if isinstance(attr_value, (int, float, str, bool)) or attr_value is None:
+                                    self.text_widget.insert(tk.END, f"{indent}      {attr_name}: ", 'header')
+                                    self.text_widget.insert(tk.END, f"{attr_value}\n", 'value')
+    
+    def _plot_generic_data(self, section_data, title):
+        """Try to plot generic data from a section."""
+        # This is now replaced by _find_plottable_data and _display_plot methods
+        # Look for plottable data and plot if found
+        try:
+            self._display_plot(section_data, title)
             self.status_var.set(f"Plotted generic data")
-        else:
-            # Create an empty plot with message
-            self.fig, self.ax = plt.subplots(figsize=(6, 4))
-            self.ax.text(0.5, 0.5, 'No plottable data found in this section',
-                        ha='center', va='center', transform=self.ax.transAxes)
-            self.ax.set_title(title)
-            self.status_var.set("No plottable data found")
+        except ValueError:
+            # If no plottable data, display as text
+            self._display_text_data(section_data, title)
     
     def _plot_comparison(self):
         """Plot comparison of common cross sections."""
@@ -358,14 +565,8 @@ class EndfGui:
                 if (3, mt) in self.material.section_data:
                     common_mt.append(mt)
             
-            # Clear previous plot
-            if hasattr(self, 'canvas'):
-                self.canvas.get_tk_widget().destroy()
-            if hasattr(self, 'toolbar'):
-                self.toolbar.destroy()
-            
-            # Close previous plot
-            plt.close(self.fig)
+            # Reset the display area
+            self._reset_display_area()
             
             # Create a new multi-plot
             self.fig, self.ax = EndfPlotter.plot_multiple_cross_sections(
@@ -377,13 +578,16 @@ class EndfGui:
             )
             
             # Add the plot to the GUI
-            self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_frame)
+            self.canvas = FigureCanvasTkAgg(self.fig, master=self.display_container)
             self.canvas.draw()
             self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
             
             # Add toolbar
-            self.toolbar = NavigationToolbar2Tk(self.canvas, self.plot_frame)
+            self.toolbar = NavigationToolbar2Tk(self.canvas, self.display_container)
             self.toolbar.update()
+            
+            # Update display type flag
+            self.current_display_type = 'plot'
             
             self.status_var.set(f"Plotted comparison of common cross sections")
         except Exception as e:
